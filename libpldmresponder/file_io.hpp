@@ -161,6 +161,13 @@ void readFileIntoMemory(const pldm_msg_payload* request, pldm_msg* response);
  */
 void writeFileFromMemory(const pldm_msg_payload* request, pldm_msg* response);
 
+/** @brief Handler for GetFileTable command
+ *
+ *  @param[in] request - request message payload
+ *  @param[out] response - response message location
+ */
+void getFileAttrTable(const pldm_msg_payload* request, pldm_msg* response);
+
 } // namespace fileio
 } // namespace responder
 } // namespace pldm

@@ -22,7 +22,9 @@ std::map<uint8_t, size_t> commandToRespSize = {
     {PLDM_SET_STATE_EFFECTER_STATES, 1},
     {PLDM_READ_FILE_INTO_MEMORY, PLDM_RW_FILE_MEM_RESP_BYTES},
     {PLDM_WRITE_FILE_FROM_MEMORY, PLDM_RW_FILE_MEM_RESP_BYTES},
-    {PLDM_GET_DATE_TIME, 8}
+    {PLDM_GET_DATE_TIME, 8},
+    // Hardcoded for the output of PHYP-NVRAM and PHYP-NVRAM-CKSUM
+    {PLDM_GET_FILE_TABLE, 66},
 };
 
 namespace mctp_lpc

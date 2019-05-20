@@ -1,5 +1,6 @@
 #include "file_io.hpp"
 
+#include "file_table.hpp"
 #include "registration.hpp"
 
 #include <fcntl.h>
@@ -29,6 +30,8 @@ void registerHandlers()
                     std::move(readFileIntoMemory));
     registerHandler(PLDM_FILE_IO, PLDM_WRITE_FILE_FROM_MEMORY,
                     std::move(writeFileFromMemory));
+    registerHandler(PLDM_FILE_IO, PLDM_GET_FILE_TABLE,
+                    std::move(getFileAttrTable));
 }
 
 namespace fs = std::filesystem;
@@ -146,53 +149,46 @@ void readFileIntoMemory(const pldm_msg_payload* request, pldm_msg* response)
 
     decode_rw_file_memory_req(request, &fileHandle, &offset, &length, &address);
 
-    if (length % dma::minSize)
-    {
-        log<level::ERR>("Readlength is not a multiple of 16");
-        encode_rw_file_memory_resp(0, PLDM_READ_FILE_INTO_MEMORY,
-                                   PLDM_INVALID_READ_LENGTH, 0, response);
-        return;
-    }
+    using namespace pldm::filetable;
+    auto& table = getFileTable(FILE_TABLE_JSON);
+    auto [rc, value] = table.getFileEntry(fileHandle);
 
-    std::string readFilePath;
-    if (fileHandle == 0)
+    if (!rc || !fs::exists(value.fsPath))
     {
-        readFilePath = "/var/lib/pldm/PHYP-NVRAM";
-    }
-    else if (fileHandle == 1)
-    {
-        readFilePath = "/var/lib/pldm/PHYP-NVRAM-CKSUM";
-    }
-    else
-    {
-        log<level::ERR>("Invalid file handle");
-        encode_rw_file_memory_resp(0, PLDM_READ_FILE_INTO_MEMORY,
-                                   PLDM_INVALID_FILE_HANDLE, 0, response);
-    }
-    fs::path path{readFilePath};
-
-    if (!fs::exists(path))
-    {
-
-        log<level::ERR>("File does not exist");
+        log<level::ERR>("File does not exist", entry("HANDLE=%d", fileHandle));
         encode_rw_file_memory_resp(0, PLDM_READ_FILE_INTO_MEMORY,
                                    PLDM_INVALID_FILE_HANDLE, 0, response);
         return;
     }
 
-    auto fileSize = fs::file_size(path);
-    if (offset + length > fileSize)
+    auto fileSize = fs::file_size(value.fsPath);
+    if (offset >= fileSize)
     {
-        log<level::ERR>("Data out of range");
+        log<level::ERR>("Offset exceeds file size", entry("OFFSET=%d", offset),
+                        entry("FILE_SIZE=%d", fileSize));
         encode_rw_file_memory_resp(0, PLDM_READ_FILE_INTO_MEMORY,
                                    PLDM_DATA_OUT_OF_RANGE, 0, response);
         return;
     }
 
+    if (offset + length > fileSize)
+    {
+        length = fileSize - offset;
+    }
+
+    if (length % dma::minSize)
+    {
+        log<level::ERR>("Read length is not a multiple of DMA minSize",
+                        entry("LENGTH=%d", length));
+        encode_rw_file_memory_resp(0, PLDM_READ_FILE_INTO_MEMORY,
+                                   PLDM_INVALID_READ_LENGTH, 0, response);
+        return;
+    }
+
     using namespace dma;
     DMA intf;
-    transferAll<DMA>(&intf, PLDM_READ_FILE_INTO_MEMORY, path, offset, length,
-                     address, true, response);
+    transferAll<DMA>(&intf, PLDM_READ_FILE_INTO_MEMORY, value.fsPath, offset,
+                     length, address, true, response);
 }
 
 void writeFileFromMemory(const pldm_msg_payload* request, pldm_msg* response)
@@ -214,41 +210,77 @@ void writeFileFromMemory(const pldm_msg_payload* request, pldm_msg* response)
 
     if (length % dma::minSize)
     {
-        log<level::ERR>("Writelength is not a multiple of 16");
+        log<level::ERR>("Write length is not a multiple of DMA minSize",
+                        entry("LENGTH=%d", length));
         encode_rw_file_memory_resp(0, PLDM_WRITE_FILE_FROM_MEMORY,
                                    PLDM_INVALID_WRITE_LENGTH, 0, response);
         return;
     }
 
-    std::string readFilePath;
-    if (fileHandle == 0)
-    {
-        readFilePath = "/var/lib/pldm/PHYP-NVRAM";
-    }
-    else if (fileHandle == 1)
-    {
-        readFilePath = "/var/lib/pldm/PHYP-NVRAM-CKSUM";
-    }
-    else
-    {
-        log<level::ERR>("Invalid file handle");
-        encode_rw_file_memory_resp(0, PLDM_WRITE_FILE_FROM_MEMORY,
-                                   PLDM_INVALID_FILE_HANDLE, 0, response);
-    }
-    fs::path path{readFilePath};
+    using namespace pldm::filetable;
+    auto& table = getFileTable(FILE_TABLE_JSON);
+    auto [rc, value] = table.getFileEntry(fileHandle);
 
-    if (!fs::exists(path))
+    if (!rc || !fs::exists(value.fsPath))
     {
-        log<level::ERR>("File does not exist");
+        log<level::ERR>("File does not exist", entry("HANDLE=%d", fileHandle));
         encode_rw_file_memory_resp(0, PLDM_WRITE_FILE_FROM_MEMORY,
                                    PLDM_INVALID_FILE_HANDLE, 0, response);
         return;
     }
 
+    auto fileSize = fs::file_size(value.fsPath);
+    if (offset >= fileSize)
+    {
+        log<level::ERR>("Offset exceeds file size", entry("OFFSET=%d", offset),
+                        entry("FILE_SIZE=%d", fileSize));
+        encode_rw_file_memory_resp(0, PLDM_WRITE_FILE_FROM_MEMORY,
+                                   PLDM_DATA_OUT_OF_RANGE, 0, response);
+        return;
+    }
+
     using namespace dma;
     DMA intf;
-    transferAll<DMA>(&intf, PLDM_WRITE_FILE_FROM_MEMORY, path, offset, length,
-                     address, false, response);
+    transferAll<DMA>(&intf, PLDM_WRITE_FILE_FROM_MEMORY, value.fsPath, offset,
+                     length, address, false, response);
+}
+
+void getFileAttrTable(const pldm_msg_payload* request, pldm_msg* response)
+{
+    uint32_t transferHandle = 0;
+    uint8_t transferFlag = 0;
+    uint8_t tableType = 0;
+
+    if (request->payload_length != PLDM_GET_FILE_TABLE_REQ_BYTES)
+    {
+        encode_get_file_table_resp(0, PLDM_ERROR_INVALID_LENGTH, 0, 0, nullptr,
+                                   0, response);
+        return;
+    }
+
+    decode_get_file_table_req(request, &transferHandle, &transferFlag,
+                              &tableType);
+
+    if (tableType != PLDM_FILE_ATTRIBUTE_TABLE)
+    {
+        encode_get_file_table_resp(0, PLDM_INVALID_FILE_TABLE_TYPE, 0, 0,
+                                   nullptr, 0, response);
+        return;
+    }
+
+    using namespace pldm::filetable;
+    auto& table = getFileTable(FILE_TABLE_JSON);
+    auto attrTable = table.getFileAttrTable();
+
+    if (attrTable.empty())
+    {
+        encode_get_file_table_resp(0, PLDM_FILE_TABLE_UNAVAILABLE, 0, 0,
+                                   nullptr, 0, response);
+        return;
+    }
+
+    encode_get_file_table_resp(0, PLDM_SUCCESS, 0, PLDM_START_AND_END,
+                               attrTable.data(), attrTable.size(), response);
 }
 
 } // namespace fileio
