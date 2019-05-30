@@ -98,7 +98,24 @@ int DMA::transferDataHost(const fs::path& path, uint32_t offset,
         std::ifstream stream(path.string());
 
         stream.seekg(offset);
-        stream.read(static_cast<char*>(vgaMemPtr.get()), length);
+        fprintf(stderr, "DMA request for 0x%.8X bytes for file %s at offset 0x%.8X and address 0x%.16llX\n", length, path.string().c_str(), offset, address);
+        fprintf(stderr, "DMA %d pages, xdma op length 0x%.8X\n", pageAlignedLength / pageSize, length);
+        fprintf(stderr, "First 16 bytes DMAd: \n");
+        if(length % pageSize)
+        {
+                std::vector<char> v{};
+                v.resize(pageAlignedLength);
+                stream.read(v.data(), length);
+                memcpy(static_cast<char*>(vgaMemPtr.get()), v.data(), pageAlignedLength);
+        }
+        else
+        {
+                stream.read(static_cast<char*>(vgaMemPtr.get()), length);
+        }
+        auto ptr = static_cast<char*>(vgaMemPtr.get());
+        for(auto i = 0; i < 16; ++i)
+                fprintf(stderr, "%.2X ", ptr[i]);
+        fprintf(stderr, "\n\n");
     }
 
     AspeedXdmaOp xdmaOp;
