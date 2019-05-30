@@ -98,7 +98,7 @@ int DMA::transferDataHost(const fs::path& path, uint32_t offset,
         std::ifstream stream(path.string());
 
         stream.seekg(offset);
-        stream.read(static_cast<char*>(vgaMemPtr.get()), length);
+        stream.read(static_cast<char*>(vgaMemPtr.get()), pageAlignedLength);
     }
 
     AspeedXdmaOp xdmaOp;
