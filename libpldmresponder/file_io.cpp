@@ -119,29 +119,86 @@ int DMA::transferDataHost(const fs::path& path, uint32_t offset,
         for(auto i = 0; i < 16; ++i)
                 fprintf(stderr, "%.2X ", ptr[i]);
         fprintf(stderr, "\n\n");
+
+        AspeedXdmaOp xdmaOp;
+        xdmaOp.upstream = upstream ? 1 : 0;
+        xdmaOp.hostAddr = address;
+        xdmaOp.len = length;
+
+        rc = write(xdmaFd(), &xdmaOp, sizeof(xdmaOp));
+        if (rc < 0)
+        {
+            rc = -errno;
+
+            log<level::ERR>("Failed to execute the DMA operation",
+                            entry("RC=%d", rc));
+            return rc;
+        }
     }
-
-    AspeedXdmaOp xdmaOp;
-    xdmaOp.upstream = upstream ? 1 : 0;
-    xdmaOp.hostAddr = address;
-    xdmaOp.len = length;
-
-    rc = write(xdmaFd(), &xdmaOp, sizeof(xdmaOp));
-    if (rc < 0)
+    else
     {
-        rc = -errno;
-
-        log<level::ERR>("Failed to execute the DMA operation",
-                        entry("RC=%d", rc));
-        return rc;
-    }
-
-    if (!upstream)
-    {
+        // 128K (131072 bytes) is the maximum data size of downstream DMA transfer
+        constexpr size_t writeMaxSize = 128 * 1024;
         std::ofstream stream(path.string());
+        uint32_t addrOffset = 0;
 
-        stream.seekp(offset);
-        stream.write(static_cast<const char*>(vgaMemPtr.get()), length);
+        AspeedXdmaOp xdmaOp;
+        xdmaOp.upstream = upstream ? 1 : 0;
+
+        while (length > writeMaxSize)
+        {
+            xdmaOp.hostAddr = address + addrOffset;
+            xdmaOp.len = writeMaxSize;
+
+            fprintf(stderr, "Downstream DMA request for 0x%.8X bytes for file %s at offset 0x%.8X and address 0x%.16llX\n",
+                    writeMaxSize, path.string().c_str(), offset, xdmaOp.hostAddr);
+            rc = write(xdmaFd(), &xdmaOp, sizeof(xdmaOp));
+            if (rc < 0)
+            {
+                rc = -errno;
+
+                log<level::ERR>("Failed to execute the DMA operation",
+                                entry("RC=%d", rc));
+                return rc;
+            }
+
+            stream.seekp(offset);
+            stream.write(static_cast<const char*>(vgaMemPtr.get()) , writeMaxSize);
+
+            auto ptr = static_cast<char*>(vgaMemPtr.get());
+            for(auto i = 0; i < 16; ++i)
+                    fprintf(stderr, "%.2X ", ptr[i]);
+            fprintf(stderr, "\n\n");
+
+            length -= writeMaxSize;
+            offset += writeMaxSize;
+            addrOffset += writeMaxSize;
+        }
+
+        if (length)
+        {
+            xdmaOp.hostAddr = address + addrOffset;
+            xdmaOp.len = length;
+            fprintf(stderr, "Downstream DMA request for 0x%.8X bytes for file %s at offset 0x%.8X and address 0x%.16llX\n",
+                    length, path.string().c_str(), offset, xdmaOp.hostAddr);
+            rc = write(xdmaFd(), &xdmaOp, sizeof(xdmaOp));
+            if (rc < 0)
+            {
+                rc = -errno;
+
+                log<level::ERR>("Failed to execute the DMA operation",
+                                entry("RC=%d", rc));
+                return rc;
+            }
+
+            stream.seekp(offset);
+            stream.write(static_cast<const char*>(vgaMemPtr.get()), length);
+
+            auto ptr = static_cast<char*>(vgaMemPtr.get());
+            for(auto i = 0; i < 16; ++i)
+                    fprintf(stderr, "%.2X ", ptr[i]);
+            fprintf(stderr, "\n\n");
+        }
     }
 
     return 0;
