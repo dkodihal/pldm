@@ -5,7 +5,8 @@ libpldmresponder_la_SOURCES = \
 	utils.cpp \
 	bios.cpp \
 	file_io.cpp \
-	platform.cpp
+	platform.cpp \
+        file_table.cpp
 
 libpldmresponder_la_LIBADD = \
 	../libpldm/libpldm.la \
